@@ -186,10 +186,10 @@ void loop() {
   }
   if (bUpdateFlags & CHANNEL3_FLAG) {
     if (unChannel5In <= 1490 && unChannel5In >= 1300) {  // Position hold mode
-      if (front == 0 && curentFront == 0 && back == 0 && currentBack == 0) {
+      if (sonarFront == 0 && curentFront == 0 && sonarBack == 0 && currentBack == 0) {
         servoChannel3.writeMicroseconds(unChannel3In);
       }
-      if (front != 0 && back == 0 && Right == 0 && Left == 0) {
+      if (sonarFront != 0 && sonarBack == 0 && sonarRight == 0 && sonarLeft == 0) {
         caseA1();
         Serial.println("Go back");
       }
@@ -197,7 +197,7 @@ void loop() {
         caseA2();
         Serial.println("Forward");
       }
-      if (Back != 0 && Front == 0 && Right == 0 && Left == 0) {
+      if (back != 0 && front == 0 && ri == 0 && Left == 0) {
         caseA9();
         Serial.println("Forward");
       }
