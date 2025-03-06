@@ -1,24 +1,52 @@
 #include "Servo.h"
 #include <NewPing.h>
 
-// Assign your channel in pins
-#define CHANNEL3_IN_PIN 3  // Channel 1
-#define CHANNEL4_IN_PIN 2  // Channel 2
-#define CHANNEL5_IN_PIN 4  // Channel 5
+// Constants for pin definitions
+#define CHANNEL3_IN_PIN 3   // Channel 1 input pin
+#define CHANNEL4_IN_PIN 2   // Channel 2 input pin
+#define CHANNEL5_IN_PIN 4   // Channel 5 input pin
 
-// Assign your channel out pins
-#define CHANNEL3_OUT_PIN 9   // Channel 1
-#define CHANNEL4_OUT_PIN 10  // Channel 2
-#define CHANNEL5_OUT_PIN 11  // Channel 5
+#define CHANNEL3_OUT_PIN 9  // Channel 1 output pin
+#define CHANNEL4_OUT_PIN 10 // Channel 2 output pin
+#define CHANNEL5_OUT_PIN 11 // Channel 5 output pin
 
-// Servo objects generate the signals expected by Electronic Speed Controllers and Servos
-// We will use the objects to output the signals we read in
-Servo servoChannel3;  // Channel 1
-Servo servoChannel4;  // Channel 2
-Servo servoChannel5;  // Channel 5
+// Ultrasonic sensor setup
+#define FRONT_TRIGGER_PIN 23
+#define FRONT_ECHO_PIN 22
+#define RIGHT_TRIGGER_PIN 25
+#define RIGHT_ECHO_PIN 24
+#define LEFT_TRIGGER_PIN 27
+#define LEFT_ECHO_PIN 26
+#define BACK_TRIGGER_PIN 29
+#define BACK_ECHO_PIN 28
+#define MAX_DISTANCE 50     // Maximum distance for sensors (in cm)
 
-// These bit flags are set in bUpdateFlagsShared to indicate which
-// channels have new signals
+// RC mode value thresholds
+#define MODE_MANUAL_MAX 1299
+#define MODE_POSITION_MIN 1300
+#define MODE_POSITION_MAX 1490
+#define MODE_LOITER_MIN 1750
+
+// Servo pulse values
+#define FORWARD_PULSE 1650
+#define BACKWARD_PULSE 1350
+
+// Flight mode constants
+enum FlightMode {
+  MODE_MANUAL,
+  MODE_POSITION_HOLD,
+  MODE_LOITER
+};
+
+// Direction constants
+enum Direction {
+  FORWARD,
+  BACKWARD,
+  LEFT,
+  RIGHT
+};
+
+// These bit flags indicate which channels have new signals
 #define CHANNEL1_FLAG 1
 #define CHANNEL2_FLAG 2
 #define CHANNEL3_FLAG 4
@@ -28,15 +56,25 @@ Servo servoChannel5;  // Channel 5
 #define CHANNEL7_FLAG 64
 #define CHANNEL8_FLAG 128
 
-// holds the update flags defined above
-volatile uint32_t bUpdateFlagsShared;
+// Servo objects for controlling ESCs and servos
+Servo servoChannel3; // Channel 1
+Servo servoChannel4; // Channel 2
+Servo servoChannel5; // Channel 5
 
-// shared variables are updated by the ISR and read by loop.
-// In loop we immediatley take local copies so that the ISR can keep ownership of the
-// shared ones. To access these in loop
-// we first turn interrupts off with noInterrupts
-// we take a copy to use in loop and the turn interrupts back on
-// as quickly as possible, this ensures that we are always able to receive new signals
+// Ultrasonic sensor objects
+NewPing sonarFront(FRONT_TRIGGER_PIN, FRONT_ECHO_PIN, MAX_DISTANCE);
+NewPing sonarRight(RIGHT_TRIGGER_PIN, RIGHT_ECHO_PIN, MAX_DISTANCE);
+NewPing sonarLeft(LEFT_TRIGGER_PIN, LEFT_ECHO_PIN, MAX_DISTANCE);
+NewPing sonarBack(BACK_TRIGGER_PIN, BACK_ECHO_PIN, MAX_DISTANCE);
+
+// Position counters for tracking movement
+int forwardCounter = 0;
+int backwardCounter = 0;
+int rightCounter = 0;
+int leftCounter = 0;
+
+// Shared variables updated by the ISR and read by loop
+volatile uint32_t bUpdateFlagsShared;
 volatile uint32_t unChannel1InShared;
 volatile uint32_t unChannel2InShared;
 volatile uint32_t unChannel3InShared;
@@ -46,64 +84,36 @@ volatile uint32_t unChannel6InShared;
 volatile uint32_t unChannel7InShared;
 volatile uint32_t unChannel8InShared;
 
-//Pin for ultrasonic
-NewPing sonar1(23, 22, 50); // Sensor 1: trigger pin, echo pin, maximum distance in cm
-NewPing sonar2(27, 26, 50); // Sensor 2: same stuff
-NewPing sonar3(25, 24, 50); // Sensor 3: same stuff
-NewPing sonar4(29, 28, 50); // Sensor 4: same stuff
-
-#define pingSpeed 35  // Ping frequency (in milliseconds), fastest we should ping is about 35ms per sensor
-unsigned long pingTimer1, pingTimer2, pingTimer3;
+// Function declarations
+void moveDirection(Direction dir, Servo& servo, int pulseValue);
+void countedMove(Direction dir, Servo& servo, int pulseValue, int& counter);
+void restorePosition(Direction dir, Servo& servo, int pulseValue, int& counter);
+FlightMode getCurrentMode(uint32_t channelValue);
+void handleObstacleAvoidance(int front, int right, int left, int back, FlightMode mode, uint32_t channel3, uint32_t channel4);
 
 void setup() {
   Serial.begin(57600);
-  Serial.println("multiChannels");
+  Serial.println("Obstacle Avoidance System");
 
-  // attach servo objects, these will generate the correct
-  // pulses for driving Electronic speed controllers, servos or other devices
-  // designed to interface directly with RC Receivers
+  // Attach servo objects to output pins
   servoChannel3.attach(CHANNEL3_OUT_PIN);
   servoChannel4.attach(CHANNEL4_OUT_PIN);
   servoChannel5.attach(CHANNEL5_OUT_PIN);
 
-  // attach the interrupts used to read the channels
-  attachInterrupt(CHANNEL3_IN_PIN, calcChannel3, CHANGE);
-  attachInterrupt(CHANNEL4_IN_PIN, calcChannel4, CHANGE);
-  attachInterrupt(CHANNEL5_IN_PIN, calcChannel5, CHANGE);
+  // Attach interrupts for reading RC channels
+  attachInterrupt(digitalPinToInterrupt(CHANNEL3_IN_PIN), calcChannel3, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(CHANNEL4_IN_PIN), calcChannel4, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(CHANNEL5_IN_PIN), calcChannel5, CHANGE);
 }
 
 void loop() {
-  int sonarFront = sonar1.ping_cm();
-  int sornaRight = sonar3.ping_cm();
-  int sonarLeft  = sonar2.ping_cm();
-  int sonarBack  = sonar4.ping_cm();
-  int distanceFront;
-  int distanceBack;
-  int distanceRight;
-  int distanceLeft;
+  // Read ultrasonic sensor values
+  int frontDistance = sonarFront.ping_cm();
+  int rightDistance = sonarRight.ping_cm();
+  int leftDistance = sonarLeft.ping_cm();
+  int backDistance = sonarBack.ping_cm();
 
-  int checkStart = 1;
-  if (checkStart == 0) {
-    Serial.print("Front = ");
-    Serial.println(front);
-    delay(1000);
-
-    Serial.print("Right = ");
-    Serial.println(right);
-    delay(1000);
-
-    Serial.print("Left = ");
-    Serial.println(left);
-    delay(1000);
-
-    Serial.print("Back = ");
-    Serial.println(back);
-    delay(1000);
-  }
-
-  // create local variables to hold a local copies of the channel inputs
-  // these are declared static so that thier values will be retained
-  // between calls to loop.
+  // Create local variables to hold local copies of the channel inputs
   static uint32_t unChannel1In;
   static uint32_t unChannel2In;
   static uint32_t unChannel3In;
@@ -112,318 +122,80 @@ void loop() {
   static uint32_t unChannel6In;
   static uint32_t unChannel7In;
   static uint32_t unChannel8In;
-
-  // local copy of update flags
+  
+  // Local copy of update flags
   static uint32_t bUpdateFlags;
 
-  // check shared update flags to see if any channels have a new signal
+  // Check if any channels have new signals
   if (bUpdateFlagsShared) {
-    noInterrupts();  // turn interrupts off quickly while we take local copies of the shared variables
+    noInterrupts(); // Turn interrupts off while taking local copies of shared variables
 
-    // take a local copy of which channels were updated in case we need to use this in the rest of loop
+    // Copy which channels were updated
     bUpdateFlags = bUpdateFlagsShared;
-
-    // in the current code, the shared values are always populated
-    // so we could copy them without testing the flags
-    // however in the future this could change, so lets
-    // only copy when the flags tell us we can.
-
+    
+    // Copy channel values when their flags are set
     if (bUpdateFlags & CHANNEL1_FLAG) {
       unChannel1In = unChannel1InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL2_FLAG) {
       unChannel2In = unChannel2InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL3_FLAG) {
       unChannel3In = unChannel3InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL4_FLAG) {
       unChannel4In = unChannel4InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL5_FLAG) {
       unChannel5In = unChannel5InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL6_FLAG) {
       unChannel6In = unChannel6InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL7_FLAG) {
       unChannel7In = unChannel7InShared;
     }
-
+    
     if (bUpdateFlags & CHANNEL8_FLAG) {
       unChannel8In = unChannel8InShared;
     }
-
-    // clear shared copy of updated flags as we have already taken the updates
-    // we still have a local copy if we need to use it in bUpdateFlags
+    
+    // Clear shared copy of updated flags
     bUpdateFlagsShared = 0;
-
-    interrupts();  // we have local copies of the inputs, so now we can turn interrupts back on
-    // as soon as interrupts are back on, we can no longer use the shared copies, the interrupt
-    // service routines own these and could update them at any time. During the update, the
-    // shared copies may contain junk. Luckily we have our local copies to work with :-)
+    
+    interrupts(); // Turn interrupts back on
   }
-
-  // do any processing from here onwards
-  // only use the local values unChannel1, unChannel2, unChannel3, unChannel4, unChannel5, unChannel6, unChannel7, unChannel8
-  // variables unChannel1InShared, unChannel2InShared, etc are always owned by the
-  // the interrupt routines and should not be used in loop
-
-  if (bUpdateFlags & CHANNEL1_FLAG) {
-    // remove the // from the line below to implement pass through updates to the servo on this channel -
-    //servoChannel1.writeMicroseconds(unChannel1In);
-  }
-
-  if (bUpdateFlags & CHANNEL2_FLAG) {
-    // remove the // from the line below to implement pass through updates to the servo on this channel -
-    //servoChannel2.writeMicroseconds(unChannel2In);;
-  }
-  if (bUpdateFlags & CHANNEL3_FLAG) {
-    if (unChannel5In <= 1490 && unChannel5In >= 1300) {  // Position hold mode
-      if (sonarFront == 0 && curentFront == 0 && sonarBack == 0 && currentBack == 0) {
-        servoChannel3.writeMicroseconds(unChannel3In);
-      }
-      if (sonarFront != 0 && sonarBack == 0 && sonarRight == 0 && sonarLeft == 0) {
-        caseA1();
-        Serial.println("Go back");
-      }
-      if (front == 0) {
-        caseA2();
-        Serial.println("Forward");
-      }
-      if (back != 0 && front == 0 && ri == 0 && Left == 0) {
-        caseA9();
-        Serial.println("Forward");
-      }
-      if (Back == 0) {
-        caseA10();
-        Serial.println("Go back");
-      }
+  
+  // Process channel updates
+  if (bUpdateFlags) {
+    // Handle the flight mode and obstacle avoidance
+    FlightMode currentMode = getCurrentMode(unChannel5In);
+    
+    if (bUpdateFlags & CHANNEL3_FLAG || bUpdateFlags & CHANNEL4_FLAG) {
+      handleObstacleAvoidance(frontDistance, rightDistance, leftDistance, backDistance,
+                              currentMode, unChannel3In, unChannel4In);
     }
-    if (unChannel5In >= 0 && unChannel5In <= 1299) {  // Manual mode, ALT mode
-      int f = 0;
-      int b = 0;
-      if (Front == 0 && Back == 0 && Right == 0 && Left == 0) {
-        servoChannel3.writeMicroseconds(unChannel3In);
-      }
-      if (Front != 0 && Back == 0 && Right == 0 && Left == 0) {
-        caseA5();
-        Serial.println("GO back");
-      }
-      if (Back != 0 && Front == 0 && Right == 0 && Left == 0) {
-        caseA8();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right != 0 && Front != 0 && Back == 0) {
-        caseA6();
-        Serial.println("GO back");
-      }
-      if (Left != 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseA7();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right != 0 && Back == 0 && Front == 0) {
-        caseA8();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front != 0) {
-        caseA11();
-        Serial.println("Go back");
-      }
-      if (Left != 0 && Right == 0 && Back != 0 && Front == 0) {
-        caseA12();
-        Serial.println("Forward");
-      }
-      if (Left == 0 && Right != 0 && Back == 0 && Front != 0) {
-        caseA11();
-        Serial.println("Go back");
-      }
-      if (Left == 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseA12();
-        Serial.println("Forward");
-      }
+    
+    // Always pass through Channel 5 (mode selection)
+    if (bUpdateFlags & CHANNEL5_FLAG) {
+      servoChannel5.writeMicroseconds(unChannel5In);
     }
-    if (unChannel5In >= 1750) {  // Loiter mode
-      int f = 0;
-      int b = 0;
-      if (Front == 0 && Back == 0 && Right == 0 && Left == 0) {
-        servoChannel3.writeMicroseconds(unChannel3In);
-      }
-      if (Front != 0 && Back == 0 && Right == 0 && Left == 0) {
-        caseA5();
-        Serial.println("GO back");
-      }
-      if (Back != 0 && Front == 0 && Right == 0 && Left == 0) {
-        caseA8();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right != 0 && Front != 0 && Back == 0) {
-        caseA6();
-        Serial.println("GO back");
-      }
-      if (Left != 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseA7();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right != 0 && Back == 0 && Front == 0) {
-        caseA8();
-        Serial.println("Forward");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front != 0) {
-        caseA11();
-        Serial.println("Go back");
-      }
-      if (Left != 0 && Right == 0 && Back != 0 && Front == 0) {
-        caseA12();
-        Serial.println("Forward");
-      }
-      if (Left == 0 && Right != 0 && Back == 0 && Front != 0) {
-        caseA11();
-        Serial.println("Go back");
-      }
-      if (Left == 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseA12();
-        Serial.println("Forward");
-      }
-    }
+    
+    // Clear update flags after processing
+    bUpdateFlags = 0;
   }
-  if (bUpdateFlags & CHANNEL4_FLAG) {
-    if (unChannel5In <= 1490 && unChannel5In >= 1300) {  // Position hold mode
-      if (Right == 0 && r == 0 && Left == 0 && l == 0) {
-        servoChannel4.writeMicroseconds(unChannel4In);
-      }
-      if (Right != 0 && Left == 0) {
-        caseB1();
-        Serial.println("Go left");
-      }
-      if (Right == 0) {
-        caseB2();
-        Serial.println("Go right");
-      }
-      if (Left != 0 && Right == 0) {
-        caseC1();
-        Serial.println("Go right");
-      }
-      if (Left == 0) {
-        caseC2();
-        Serial.println("Go left");
-      }
-    }
-    if (unChannel5In >= 0 && unChannel5In <= 1299) {  // Manual mode, ALT mode
-      int r = 0;
-      int l = 0;
-      if (Right == 0 && Left == 0 && Back == 0 && Front == 0) {
-        servoChannel4.writeMicroseconds(unChannel4In);
-      }
-      if (Right != 0 && Left == 0 && Back == 0 && Front == 0) {
-        caseB3();
-        Serial.println("Go left");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front == 0) {
-        caseC3();
-        Serial.println("Go right");
-      }
-      if (Front != 0 && Back != 0 && Left != 0 && Right == 0) {
-        caseC6();
-        Serial.println("Go right");
-      }
-      if (Front != 0 && Back != 0 && Right != 0 && Left == 0) {
-        caseB6();
-        Serial.println("Go left");
-      }
-      if (Front != 0 && Back != 0 && Right == 0 && Left == 0) {
-        caseB3();
-        Serial.println("Go left");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front != 0) {
-        caseB7();
-        Serial.println("Go right");
-      }
-      if (Left != 0 && Right == 0 && Back != 0 && Front == 0) {
-        caseB7();
-        Serial.println("Go right");
-      }
-      if (Left == 0 && Right != 0 && Back == 0 && Front != 0) {
-        caseC7();
-        Serial.println("Go left");
-      }
-      if (Left == 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseC7();
-        Serial.println("Go left");
-      }
-    }
-    if (unChannel5In >= 1750) {  // Loiter mode
-      int r = 0;
-      int l = 0;
-      if (Right == 0 && Left == 0 && Back == 0 && Front == 0) {
-        servoChannel4.writeMicroseconds(unChannel4In);
-      }
-      if (Right != 0 && Left == 0 && Back == 0 && Front == 0) {
-        caseB3();
-        Serial.println("Go left");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front == 0) {
-        caseC3();
-        Serial.println("Go right");
-      }
-      if (Front != 0 && Back != 0 && Left != 0 && Right == 0) {
-        caseC6();
-        Serial.println("Go right");
-      }
-      if (Front != 0 && Back != 0 && Right != 0 && Left == 0) {
-        caseB6();
-        Serial.println("Go left");
-      }
-      if (Front != 0 && Back != 0 && Right == 0 && Left == 0) {
-        caseB3();
-        Serial.println("Go left");
-      }
-      if (Left != 0 && Right == 0 && Back == 0 && Front != 0) {
-        caseB7();
-        Serial.println("Go right");
-      }
-      if (Left != 0 && Right == 0 && Back != 0 && Front == 0) {
-        caseB7();
-        Serial.println("Go right");
-      }
-      if (Left == 0 && Right != 0 && Back == 0 && Front != 0) {
-        caseC7();
-        Serial.println("Go left");
-      }
-      if (Left == 0 && Right != 0 && Back != 0 && Front == 0) {
-        caseC7();
-        Serial.println("Go left");
-      }
-    }
-  }
-  if (bUpdateFlags & CHANNEL5_FLAG) {
-    servoChannel5.writeMicroseconds(unChannel5In);
-  }
-
-  if (bUpdateFlags & CHANNEL6_FLAG) {
-    // servoChannel6.writeMicroseconds(unChannel6In);
-  }
-
-  if (bUpdateFlags & CHANNEL7_FLAG) {
-    // servoChannel7.writeMicroseconds(unChannel7In);
-  }
-
-  if (bUpdateFlags & CHANNEL8_FLAG) {
-    // servoChannel8.writeMicroseconds(unChannel8In);
-  }
-
-  bUpdateFlags = 0;
 }
 
+// Interrupt service routines for RC channels
 void calcChannel3() {
   static uint32_t ulStart;
-
+  
   if (digitalRead(CHANNEL3_IN_PIN)) {
     ulStart = micros();
   } else {
@@ -434,7 +206,7 @@ void calcChannel3() {
 
 void calcChannel4() {
   static uint32_t ulStart;
-
+  
   if (digitalRead(CHANNEL4_IN_PIN)) {
     ulStart = micros();
   } else {
@@ -445,7 +217,7 @@ void calcChannel4() {
 
 void calcChannel5() {
   static uint32_t ulStart;
-
+  
   if (digitalRead(CHANNEL5_IN_PIN)) {
     ulStart = micros();
   } else {
@@ -454,150 +226,152 @@ void calcChannel5() {
   }
 }
 
-
-/// Case to avoidance object ///
-void caseA1() {
-  int F1 = 1350;
-  f = f + 1;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA2() {
-  if (f != 0) {
-    int Fa = 1650;
-    servoChannel3.writeMicroseconds(Fa);
-    f = f - 1;
-    delay(100);
+// Helper function to determine current flight mode based on channel 5 value
+FlightMode getCurrentMode(uint32_t channel5Value) {
+  if (channel5Value <= MODE_MANUAL_MAX) {
+    return MODE_MANUAL;
+  } else if (channel5Value >= MODE_POSITION_MIN && channel5Value <= MODE_POSITION_MAX) {
+    return MODE_POSITION_HOLD;
+  } else if (channel5Value >= MODE_LOITER_MIN) {
+    return MODE_LOITER;
+  } else {
+    // Default to manual mode
+    return MODE_MANUAL;
   }
-}
-void caseA5() {
-  int F1 = 1350;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA6() {
-  int F1 = 1350;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA7() {
-  int F1 = 1650;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA8() {
-  int F1 = 1650;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA9() {
-  int F1 = 1650;
-  b = b + 1;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA10() {
-  if (b != 0) {
-    int Fa = 1350;
-    servoChannel3.writeMicroseconds(Fa);
-    b = b - 1;
-    delay(100);
-  }
-}
-void caseA11() {
-  int F1 = 1350;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseA12() {
-  int F1 = 1650;
-  servoChannel3.writeMicroseconds(F1);
-  delay(100);
-}
-void caseB1() {
-  int R1 = 1350;
-  r = r + 1;
-  servoChannel4.writeMicroseconds(R1);
-  delay(100);
 }
 
-void caseB2() {
-  if (r != 0) {
-    int Ra = 1650;
-    servoChannel4.writeMicroseconds(Ra);
-    r = r - 1;
-    delay(100);
+// Move in a direction without tracking
+void moveDirection(Direction dir, Servo& servo, int pulseValue) {
+  servo.writeMicroseconds(pulseValue);
+  delay(100);
+  
+  // Debug output
+  if (dir == FORWARD) {
+    Serial.println("Forward");
+  } else if (dir == BACKWARD) {
+    Serial.println("Go back");
+  } else if (dir == LEFT) {
+    Serial.println("Go left");
+  } else if (dir == RIGHT) {
+    Serial.println("Go right");
   }
 }
-void caseB3() {
-  int R1 = 1350;
-  servoChannel4.writeMicroseconds(R1);
+
+// Move in a direction and track the movement count
+void countedMove(Direction dir, Servo& servo, int pulseValue, int& counter) {
+  counter++;
+  servo.writeMicroseconds(pulseValue);
   delay(100);
-}
-void caseB4() {
-  int R1 = 1350;
-  r = r + 1;
-  servoChannel4.writeMicroseconds(R1);
-  delay(100);
-}
-void caseB5() {
-  if (r != 0) {
-    int Ra = 1650;
-    servoChannel4.writeMicroseconds(Ra);
-    r = r - 1;
-    delay(100);
+  
+  // Debug output
+  if (dir == FORWARD) {
+    Serial.println("Forward");
+  } else if (dir == BACKWARD) {
+    Serial.println("Go back");
+  } else if (dir == LEFT) {
+    Serial.println("Go left");
+  } else if (dir == RIGHT) {
+    Serial.println("Go right");
   }
 }
-void caseB6() {
-  int R1 = 1350;
-  servoChannel4.writeMicroseconds(R1);
-  delay(100);
-}
-void caseB7() {
-  int R1 = 1650;
-  servoChannel4.writeMicroseconds(R1);
-  delay(100);
-}
-void caseC1() {
-  int L1 = 1650;
-  l = l + 1;
-  servoChannel4.writeMicroseconds(L1);
-  delay(100);
-}
-void caseC2() {
-  if (l != 0) {
-    int La = 1350;
-    servoChannel4.writeMicroseconds(La);
-    l = l - 1;
+
+// Restore original position by moving in opposite direction
+void restorePosition(Direction dir, Servo& servo, int pulseValue, int& counter) {
+  if (counter > 0) {
+    counter--;
+    servo.writeMicroseconds(pulseValue);
     delay(100);
+    
+    // Debug output
+    if (dir == FORWARD) {
+      Serial.println("Forward");
+    } else if (dir == BACKWARD) {
+      Serial.println("Go back");
+    } else if (dir == LEFT) {
+      Serial.println("Go left");
+    } else if (dir == RIGHT) {
+      Serial.println("Go right");
+    }
   }
 }
-void caseC3() {
-  int L1 = 1650;
-  servoChannel4.writeMicroseconds(L1);
-  delay(100);
-}
-void caseC4() {
-  int L1 = 1650;
-  l = l + 1;
-  servoChannel4.writeMicroseconds(L1);
-  delay(100);
-}
-void caseC5() {
-  if (l != 0) {
-    int La = 1350;
-    servoChannel4.writeMicroseconds(La);
-    l = l - 1;
-    delay(100);
+
+// Main function to handle obstacle avoidance based on sensor data and flight mode
+void handleObstacleAvoidance(int front, int right, int left, int back, 
+                            FlightMode mode, uint32_t channel3, uint32_t channel4) {
+  
+  // Handle Channel 3 (forward/backward movement)
+  if (mode == MODE_POSITION_HOLD) {
+    // Position hold mode with position memory
+    if (front == 0 && back == 0 && forwardCounter == 0 && backwardCounter == 0) {
+      servoChannel3.writeMicroseconds(channel3);
+    } else if (front != 0 && back == 0) {
+      countedMove(BACKWARD, servoChannel3, BACKWARD_PULSE, forwardCounter);
+    } else if (front == 0 && forwardCounter != 0) {
+      restorePosition(FORWARD, servoChannel3, FORWARD_PULSE, forwardCounter);
+    } else if (back != 0 && front == 0) {
+      countedMove(FORWARD, servoChannel3, FORWARD_PULSE, backwardCounter);
+    } else if (back == 0 && backwardCounter != 0) {
+      restorePosition(BACKWARD, servoChannel3, BACKWARD_PULSE, backwardCounter);
+    }
+  } else {
+    // Manual mode or Loiter mode - no position memory
+    if (front == 0 && back == 0 && right == 0 && left == 0) {
+      servoChannel3.writeMicroseconds(channel3);
+    } else if (front != 0 && back == 0) {
+      moveDirection(BACKWARD, servoChannel3, BACKWARD_PULSE);
+    } else if (back != 0 && front == 0) {
+      moveDirection(FORWARD, servoChannel3, FORWARD_PULSE);
+    } else if (left != 0 && right != 0 && front != 0 && back == 0) {
+      moveDirection(BACKWARD, servoChannel3, BACKWARD_PULSE);
+    } else if (left != 0 && right != 0 && back != 0 && front == 0) {
+      moveDirection(FORWARD, servoChannel3, FORWARD_PULSE);
+    } else if (left != 0 && right != 0 && back == 0 && front == 0) {
+      moveDirection(FORWARD, servoChannel3, FORWARD_PULSE);
+    } else if ((left != 0 && right == 0) || (left == 0 && right != 0)) {
+      if (front != 0 && back == 0) {
+        moveDirection(BACKWARD, servoChannel3, BACKWARD_PULSE);
+      } else if (back != 0 && front == 0) {
+        moveDirection(FORWARD, servoChannel3, FORWARD_PULSE);
+      }
+    }
   }
-}
-void caseC6() {
-  int L1 = 1650;
-  servoChannel4.writeMicroseconds(L1);
-  delay(100);
-}
-void caseC7() {
-  int L1 = 1350;
-  servoChannel4.writeMicroseconds(L1);
-  delay(100);
+  
+  // Handle Channel 4 (left/right movement)
+  if (mode == MODE_POSITION_HOLD) {
+    // Position hold mode with position memory
+    if (right == 0 && left == 0 && rightCounter == 0 && leftCounter == 0) {
+      servoChannel4.writeMicroseconds(channel4);
+    } else if (right != 0 && left == 0) {
+      countedMove(LEFT, servoChannel4, BACKWARD_PULSE, rightCounter);
+    } else if (right == 0 && rightCounter != 0) {
+      restorePosition(RIGHT, servoChannel4, FORWARD_PULSE, rightCounter);
+    } else if (left != 0 && right == 0) {
+      countedMove(RIGHT, servoChannel4, FORWARD_PULSE, leftCounter);
+    } else if (left == 0 && leftCounter != 0) {
+      restorePosition(LEFT, servoChannel4, BACKWARD_PULSE, leftCounter);
+    }
+  } else {
+    // Manual mode or Loiter mode - no position memory
+    if (right == 0 && left == 0 && back == 0 && front == 0) {
+      servoChannel4.writeMicroseconds(channel4);
+    } else if (right != 0 && left == 0 && back == 0 && front == 0) {
+      moveDirection(LEFT, servoChannel4, BACKWARD_PULSE);
+    } else if (left != 0 && right == 0 && back == 0 && front == 0) {
+      moveDirection(RIGHT, servoChannel4, FORWARD_PULSE);
+    } else if (front != 0 && back != 0) {
+      if (left != 0 && right == 0) {
+        moveDirection(RIGHT, servoChannel4, FORWARD_PULSE);
+      } else if (right != 0 && left == 0) {
+        moveDirection(LEFT, servoChannel4, BACKWARD_PULSE);
+      } else {
+        moveDirection(LEFT, servoChannel4, BACKWARD_PULSE);
+      }
+    } else if ((left != 0 && right == 0) || (left == 0 && right != 0)) {
+      if (left != 0) {
+        moveDirection(RIGHT, servoChannel4, FORWARD_PULSE);
+      } else {
+        moveDirection(LEFT, servoChannel4, BACKWARD_PULSE);
+      }
+    }
+  }
 }
