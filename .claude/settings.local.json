@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout develop)",
+      "Bash(git checkout -b feature/all_feature_1.2.0)",
+      "Bash(git checkout -b feature/fix-avoidance-logic)",
+      "Bash(git add README.md CLAUDE.md PLAN.md)",
+      "Bash(git commit:*)",
+      "Bash(git push -u origin feature/fix-avoidance-logic)"
+    ]
+  }
+}
