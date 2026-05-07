@@ -2,30 +2,32 @@
 
 ## Overview
 
-ระบบ obstacle avoidance สำหรับโดรน/ยานพาหนะ RC ใช้ ultrasonic sensors 4 ทิศทาง (front, back, left, right) เพื่อตรวจจับสิ่งกีดขวางและปรับการเคลื่อนที่โดยอัตโนมัติ รองรับ 3 flight modes และมี interrupt-driven RC signal reading สำหรับ response ที่รวดเร็ว
+An obstacle avoidance system for drones / RC vehicles. Uses four ultrasonic sensors (front, back, left, right) to detect obstacles and adjust movement automatically. Supports three flight modes and uses interrupt-driven RC signal reading for fast response.
 
 ---
 
 ## Features
 
-- **Multi-directional obstacle detection** — ultrasonic sensors 4 ตัว (front, back, left, right)
+- **Multi-directional obstacle detection** — four ultrasonic sensors (front, back, left, right)
 - **Three flight modes**:
-  - **Manual Mode** — หลบสิ่งกีดขวางแบบพื้นฐาน ไม่จำตำแหน่งเดิม
-  - **Position Hold Mode** — หลบแล้วกลับตำแหน่งเดิมด้วย time-based tracking
-  - **Loiter Mode** — คล้าย Manual แต่ปรับสำหรับการ hover
-- **RC signal pass-through** — ส่ง RC signal ผ่านตรงเมื่อไม่มีสิ่งกีดขวาง
-- **Interrupt-driven RC reading** — อ่าน PWM signal ผ่าน interrupt สำหรับ timing แม่นยำ
-- **Simulation mode** — ทดสอบโดยไม่ต้องมี hardware จริง
+  - **Manual Mode** — basic obstacle avoidance, no position memory
+  - **Position Hold Mode** — avoid then return to the original position via time-based tracking
+  - **Loiter Mode** — similar to Manual, tuned for hovering
+- **RC signal pass-through** — RC input is forwarded directly when there is no obstacle
+- **Interrupt-driven RC reading** — PWM signals read via interrupts for accurate timing
+- **Bounded avoidance duration** — single avoidance phase capped by `MAX_AVOID_MS` for safety
+- **Sensor fail-safe** — if sensor readings become invalid, the system holds neutral and resets state automatically
+- **Simulation mode** — test the system without real hardware
 
 ---
 
 ## Hardware Requirements
 
-- Arduino Mega (หรือ board ที่มี pin เพียงพอ)
+- Arduino Mega (or any board with enough pins)
 - HC-SR04 ultrasonic sensors × 4
-- RC receiver อย่างน้อย 3 channels
-- Servos หรือ ESCs สำหรับควบคุมยานพาหนะ
-- Power supply ที่เหมาะสมกับ setup
+- RC receiver with at least 3 channels
+- Servos or ESCs to drive the vehicle
+- Power supply matched to your setup
 
 ---
 
@@ -52,51 +54,53 @@
 
 ## Installation
 
-1. ต่อ hardware ตาม pin configuration ด้านบน
-2. ติดตั้ง libraries ที่ต้องการ:
-   - `Servo.h` (มาพร้อม Arduino IDE)
-   - `NewPing.h` (ติดตั้งผ่าน Arduino Library Manager)
-3. **ก่อน upload จริง** — เปลี่ยน `#define SIMULATION_MODE` ใน `config.h` เป็น `false`
-4. Upload `avoidance_system.ino` ไปยัง Arduino
+1. Wire the hardware according to the pin configuration above.
+2. Install the required libraries:
+   - `Servo.h` (bundled with the Arduino IDE)
+   - `NewPing.h` (install via the Arduino Library Manager)
+3. **Before uploading to real hardware**, set `#define SIMULATION_MODE` to `false` in `config.h`.
+4. Upload `avoidance_system.ino` to the Arduino.
 
 ---
 
 ## Configuration
 
-ค่าที่ปรับได้ทั้งหมดอยู่ใน `config.h`:
+All tunable values live in `config.h`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `SIMULATION_MODE` | `true` | เปลี่ยนเป็น `false` ก่อน deploy จริง |
-| `MAX_DISTANCE` | `50` | ระยะ detect สูงสุด (cm) |
-| `FORWARD_PULSE` | `1650` | Servo pulse สำหรับเดินหน้า (µs) |
-| `BACKWARD_PULSE` | `1350` | Servo pulse สำหรับถอยหลัง (µs) |
-| `NEUTRAL_PULSE` | `1500` | Servo pulse สำหรับหยุดนิ่ง (µs) |
-| `MODE_MANUAL_MAX` | `1299` | Channel 5 threshold สำหรับ Manual mode |
-| `MODE_POSITION_MIN/MAX` | `1300/1490` | Channel 5 range สำหรับ Position Hold |
-| `MODE_LOITER_MIN` | `1750` | Channel 5 threshold สำหรับ Loiter |
+| `SIMULATION_MODE` | `true` | Set to `false` before deploying to real hardware |
+| `MAX_DISTANCE` | `50` | Maximum detection distance (cm) |
+| `FORWARD_PULSE` | `1650` | Servo pulse for forward motion (µs) |
+| `BACKWARD_PULSE` | `1350` | Servo pulse for backward motion (µs) |
+| `NEUTRAL_PULSE` | `1500` | Servo pulse for hold/stop (µs) |
+| `MODE_MANUAL_MAX` | `1299` | Channel 5 threshold for Manual mode |
+| `MODE_POSITION_MIN/MAX` | `1300/1490` | Channel 5 range for Position Hold |
+| `MODE_LOITER_MIN` | `1750` | Channel 5 threshold for Loiter |
+| `MAX_AVOID_MS` | `5000` | Maximum duration of a single avoidance phase (ms); restore takes the same amount |
+| `SENSOR_INVALID_TIMEOUT_MS` | `1000` | Reset avoidance state after this much continuous invalid sensor time (ms) |
 
 ---
 
 ## Usage
 
-1. เปิด RC transmitter
-2. เปิด Arduino และยานพาหนะ
-3. เลือก flight mode ด้วย Channel 5:
+1. Turn on the RC transmitter.
+2. Power up the Arduino and the vehicle.
+3. Select a flight mode with Channel 5:
    - **Manual Mode**: Channel 5 ≤ 1299
    - **Position Hold Mode**: Channel 5 = 1300–1490
    - **Loiter Mode**: Channel 5 ≥ 1750
-4. บังคับยานพาหนะตามปกติ — ระบบจะหลบสิ่งกีดขวางอัตโนมัติ
+4. Drive the vehicle as usual — the system handles obstacle avoidance automatically.
 
 ---
 
 ## Simulation Mode
 
-ทดสอบระบบโดยไม่ต้องมี hardware จริง:
+Test the system without real hardware:
 
-1. ตรวจสอบว่า `config.h` มี `#define SIMULATION_MODE true`
-2. Upload และเปิด Serial Monitor (57600 baud)
-3. ระบบจะ cycle ผ่าน 6 scenarios อัตโนมัติทุก 3 วินาที:
+1. Make sure `config.h` has `#define SIMULATION_MODE true`.
+2. Upload and open the Serial Monitor (57600 baud).
+3. The system cycles through 6 scenarios automatically every 3 seconds:
    - No obstacles
    - Obstacle in front
    - Obstacle on right
@@ -117,25 +121,27 @@ avoidance_system/
 ├── rc_input.h / .cpp      # RC PWM reading via interrupts
 └── avoidance_logic.h / .cpp  # avoidance decision logic per flight mode
 PLAN.md                    # implementation plan (v1.1.0 refactor)
-CLAUDE.md                  # คำแนะนำสำหรับ AI assistant
+CLAUDE.md                  # guidance for the AI assistant
 ```
 
 ---
 
 ## Troubleshooting
 
-| อาการ | สาเหตุที่พบบ่อย |
-|-------|----------------|
-| เคลื่อนที่ผิดปกติ | ตรวจ sensor wiring และการติดตั้ง |
-| ไม่ detect สิ่งกีดขวาง | ตรวจ ultrasonic sensor power และ wiring |
-| ไม่ตอบสนอง RC | ตรวจ RC receiver connection และ channel mapping |
-| Flight mode ผิด | ตรวจ Channel 5 signal range และ mode thresholds ใน `config.h` |
-| ระบบรันใน sim mode บน hardware | ตรวจว่า `SIMULATION_MODE false` ใน `config.h` |
+| Symptom | Common cause |
+|---------|--------------|
+| Erratic movement | Check sensor wiring and mounting |
+| Obstacles not detected | Check ultrasonic sensor power and wiring |
+| No response to RC | Check RC receiver connection and channel mapping |
+| Wrong flight mode | Check Channel 5 signal range and the mode thresholds in `config.h` |
+| System runs in sim mode on real hardware | Verify `SIMULATION_MODE false` in `config.h` |
+| Restore phase shorter than the avoidance phase | Duration is clamped by `MAX_AVOID_MS`; raise it if you need a longer avoidance window |
+| `WARNING: sensors invalid - state reset` appears | Sensor readings stayed invalid longer than `SENSOR_INVALID_TIMEOUT_MS`; check ultrasonic wiring/power |
 
 ---
 
 ## Development Notes
 
-- ดู `PLAN.md` สำหรับ implementation plan ของ v1.1.0 (time-based tracking + avoidance logic fixes)
-- ดู `CLAUDE.md` สำหรับ conventions และข้อกำหนดของโปรเจกต์
-- อย่าใช้ `delay()` ใน main loop หรือ ISR — ระบบต้องเป็น non-blocking ทั้งหมด
+- See `PLAN.md` for the v1.1.0 implementation plan (time-based tracking + avoidance logic fixes).
+- See `CLAUDE.md` for project conventions and constraints.
+- Do not use `delay()` in the main loop or in any ISR — the system must remain fully non-blocking.

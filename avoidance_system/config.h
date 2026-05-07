@@ -31,9 +31,17 @@
 #define MODE_POSITION_MAX 1490
 #define MODE_LOITER_MIN 1750
 
+// Simulation mode — set to false before uploading to real hardware
+#define SIMULATION_MODE true
+
 // Servo pulse values
 #define FORWARD_PULSE 1650
 #define BACKWARD_PULSE 1350
+#define NEUTRAL_PULSE 1500
+
+// Avoidance safety limits
+#define MAX_AVOID_MS 5000UL              // hard cap on a single avoidance phase
+#define SENSOR_INVALID_TIMEOUT_MS 1000UL // reset avoidance state after this much invalid sensor time
 
 // Channel update flags
 #define CHANNEL1_FLAG 1

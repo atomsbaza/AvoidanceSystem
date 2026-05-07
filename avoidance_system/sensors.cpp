@@ -6,8 +6,8 @@ NewPing sonarRight(RIGHT_TRIGGER_PIN, RIGHT_ECHO_PIN, MAX_DISTANCE);
 NewPing sonarLeft(LEFT_TRIGGER_PIN, LEFT_ECHO_PIN, MAX_DISTANCE);
 NewPing sonarBack(BACK_TRIGGER_PIN, BACK_ECHO_PIN, MAX_DISTANCE);
 
-// Flag to enable simulation mode (no hardware needed)
-bool simulationMode = true;
+// Simulation mode — driven by compile-time flag in config.h
+bool simulationMode = SIMULATION_MODE;
 
 // Simulated obstacle scenario (0 = no obstacle, >0 = distance to obstacle)
 int simulatedFront = 0;
@@ -58,9 +58,12 @@ SensorData readSensors() {
     Serial.println(data.backDistance);
   }
   
-  // Validate readings
-  data.isValid = true;
-  
+  // Validate all readings
+  data.isValid = validateSensorReading(data.frontDistance) &&
+                 validateSensorReading(data.rightDistance) &&
+                 validateSensorReading(data.leftDistance) &&
+                 validateSensorReading(data.backDistance);
+
   return data;
 }
 
@@ -115,13 +118,9 @@ void updateSimulation() {
   }
 }
 
-// Validate a single sensor reading
+// Validate a single sensor reading.
+// 0 = no obstacle detected (valid). Non-zero must be in [2, MAX_DISTANCE] cm.
 bool validateSensorReading(int reading) {
-  // For simulation mode, all readings are considered valid
-  if (simulationMode) {
-    return true;
-  }
-  
-  // For real hardware, implement validation logic
-  return true;
+  if (reading == 0) return true;
+  return (reading >= 2 && reading <= MAX_DISTANCE);
 } 

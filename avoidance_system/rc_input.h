@@ -21,6 +21,7 @@ void calcChannel3();
 void calcChannel4();
 void calcChannel5();
 FlightMode getCurrentMode(uint32_t channelValue);
+void updateSimulatedRC();
 void updateLocalRCData();
 
 // Structure to hold RC channel data

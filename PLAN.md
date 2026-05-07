@@ -182,9 +182,9 @@ void updateSimulatedRC(); // เพิ่มใน function declarations section
 
 ## Status
 
-- [ ] 1. Time-based tracking (`movement.h`, `movement.cpp`)
-- [ ] 2. Avoidance logic edge cases (`avoidance_logic.cpp`)
-- [ ] 3. simulationMode compile flag (`config.h`, `sensors.cpp`)
-- [ ] 4. validateSensorReading (`sensors.cpp`, `avoidance_system.ino`)
-- [ ] 5. servoChannel5 simulation guard (`avoidance_system.ino`)
-- [ ] 6. updateSimulatedRC header declaration (`rc_input.h`)
+- [x] 1. Time-based tracking (`movement.h`, `movement.cpp`)
+- [x] 2. Avoidance logic edge cases (`avoidance_logic.cpp`)
+- [x] 3. simulationMode compile flag (`config.h`, `sensors.cpp`)
+- [x] 4. validateSensorReading (`sensors.cpp`, `avoidance_system.ino`)
+- [x] 5. servoChannel5 simulation guard (`avoidance_system.ino`)
+- [x] 6. updateSimulatedRC header declaration (`rc_input.h`)
